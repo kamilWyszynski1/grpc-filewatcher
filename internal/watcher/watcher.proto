@@ -1,0 +1,15 @@
+﻿syntax = "proto3";
+
+package watcher;
+option go_package = "./;watcher";
+
+message Empty {}
+
+message Change {
+    string file_name = 1;
+    string event_name = 2;
+}
+
+service WatcherService {
+    rpc GetLastChange(Empty) returns (Change);
+}
