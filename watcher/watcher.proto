@@ -1,0 +1,10 @@
+﻿syntax = "proto3";
+package watcher;
+
+option go_package = ".";
+
+message Change {
+    string file_name = 1;
+    int32 bytes_changed = 2;
+}
+

@@ -1,0 +1,2 @@
+# go.etcd.io/bbolt v1.3.6
+## explicit
