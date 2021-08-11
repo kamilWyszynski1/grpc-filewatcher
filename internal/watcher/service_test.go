@@ -14,7 +14,7 @@ import (
 
 func TestWatcherService(t *testing.T) {
 	cache := lru.NewLRU(10, nil)
-	svc := watcher.NewService(cache)
+	svc := watcher.NewService(cache, nil)
 
 	f, err := os.OpenFile(path.Join("..", "testdata", "testfile.txt"), os.O_WRONLY|os.O_APPEND, os.ModeAppend)
 
@@ -24,7 +24,7 @@ func TestWatcherService(t *testing.T) {
 	b, _ := ioutil.ReadAll(f)
 	fmt.Println(string(b))
 
-	if err := svc.Filename(f.Name()).Watch(); err != nil {
+	if err := svc.Filename(f.Name()).Watch(nil); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(time.Second * 3)

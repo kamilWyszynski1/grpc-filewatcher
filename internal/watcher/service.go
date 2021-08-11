@@ -7,6 +7,7 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/kamilWyszynski1/filewatcher-grpc/internal/lru"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type Service struct {
@@ -16,11 +17,13 @@ type Service struct {
 	cache             lru.LRU
 	fileWatcherCloser func() error
 	done              chan struct{}
+	repo              Repository
 }
 
-func NewService(cache lru.LRU) *Service {
+func NewService(cache lru.LRU, repo Repository) *Service {
 	return &Service{
 		cache: cache,
+		repo:  repo,
 	}
 }
 
@@ -39,7 +42,7 @@ func (s Service) Close() error {
 	return s.fileWatcherCloser()
 }
 
-func (s *Service) Watch() error {
+func (s *Service) Watch(changes chan *Change) error {
 	fileWatcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return err
@@ -53,7 +56,14 @@ func (s *Service) Watch() error {
 				if !ok {
 					continue
 				}
-				s.cache.Add(event)
+				fmt.Println(event)
+				ch := &Change{
+					FileName:  s.filename,
+					EventName: event.String(),
+					Timestamp: timestamppb.Now(),
+				}
+				s.cache.Add(ch)
+				changes <- ch
 			case err, ok := <-fileWatcher.Errors:
 				if !ok {
 					continue
@@ -74,27 +84,16 @@ func (s *Service) Watch() error {
 
 func (s Service) logf(format string, args ...interface{}) {
 	if s.log != nil {
-		s.log.Printf(format, args)
+		s.log.Printf(format, args...)
 	}
 }
 
 func (s Service) logn(args ...interface{}) {
 	if s.log != nil {
-		s.log.Println(args)
+		s.log.Println(args...)
 	}
 }
 
 func (s Service) GetLastChange(context.Context, *Empty) (*Change, error) {
-	ev, ok := s.cache.Get().(fsnotify.Event)
-	if !ok {
-		return &Change{
-			FileName:  s.filename,
-			EventName: "",
-		}, nil
-	}
-	fmt.Println(ev)
-	return &Change{
-		FileName:  s.filename,
-		EventName: ev.String(),
-	}, nil
+	return s.repo.Get(1)
 }

@@ -19,6 +19,7 @@ const _ = grpc.SupportPackageIsVersion7
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type WatcherServiceClient interface {
 	GetLastChange(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Change, error)
+	StreamChanges(ctx context.Context, in *Empty, opts ...grpc.CallOption) (WatcherService_StreamChangesClient, error)
 }
 
 type watcherServiceClient struct {
@@ -38,11 +39,44 @@ func (c *watcherServiceClient) GetLastChange(ctx context.Context, in *Empty, opt
 	return out, nil
 }
 
+func (c *watcherServiceClient) StreamChanges(ctx context.Context, in *Empty, opts ...grpc.CallOption) (WatcherService_StreamChangesClient, error) {
+	stream, err := c.cc.NewStream(ctx, &WatcherService_ServiceDesc.Streams[0], "/watcher.WatcherService/StreamChanges", opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &watcherServiceStreamChangesClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type WatcherService_StreamChangesClient interface {
+	Recv() (*Change, error)
+	grpc.ClientStream
+}
+
+type watcherServiceStreamChangesClient struct {
+	grpc.ClientStream
+}
+
+func (x *watcherServiceStreamChangesClient) Recv() (*Change, error) {
+	m := new(Change)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 // WatcherServiceServer is the server API for WatcherService service.
 // All implementations must embed UnimplementedWatcherServiceServer
 // for forward compatibility
 type WatcherServiceServer interface {
 	GetLastChange(context.Context, *Empty) (*Change, error)
+	StreamChanges(*Empty, WatcherService_StreamChangesServer) error
 	mustEmbedUnimplementedWatcherServiceServer()
 }
 
@@ -52,6 +86,9 @@ type UnimplementedWatcherServiceServer struct {
 
 func (UnimplementedWatcherServiceServer) GetLastChange(context.Context, *Empty) (*Change, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetLastChange not implemented")
+}
+func (UnimplementedWatcherServiceServer) StreamChanges(*Empty, WatcherService_StreamChangesServer) error {
+	return status.Errorf(codes.Unimplemented, "method StreamChanges not implemented")
 }
 func (UnimplementedWatcherServiceServer) mustEmbedUnimplementedWatcherServiceServer() {}
 
@@ -84,6 +121,27 @@ func _WatcherService_GetLastChange_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WatcherService_StreamChanges_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(Empty)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(WatcherServiceServer).StreamChanges(m, &watcherServiceStreamChangesServer{stream})
+}
+
+type WatcherService_StreamChangesServer interface {
+	Send(*Change) error
+	grpc.ServerStream
+}
+
+type watcherServiceStreamChangesServer struct {
+	grpc.ServerStream
+}
+
+func (x *watcherServiceStreamChangesServer) Send(m *Change) error {
+	return x.ServerStream.SendMsg(m)
+}
+
 // WatcherService_ServiceDesc is the grpc.ServiceDesc for WatcherService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -96,6 +154,12 @@ var WatcherService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _WatcherService_GetLastChange_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "StreamChanges",
+			Handler:       _WatcherService_StreamChanges_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "internal/watcher/watcher.proto",
 }
