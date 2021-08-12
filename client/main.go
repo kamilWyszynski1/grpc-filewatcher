@@ -5,7 +5,8 @@ import (
 	"fmt"
 	"log"
 
-	watcher2 "github.com/kamilWyszynski1/filewatcher-grpc/internal/watcher"
+	"github.com/kamilWyszynski1/filewatcher-grpc/internal/pb"
+
 	"google.golang.org/grpc"
 )
 
@@ -17,9 +18,17 @@ func main() {
 	}
 	defer cc.Close()
 
-	client := watcher2.NewWatcherServiceClient(cc)
-	request := &watcher2.Empty{}
+	client := pb.NewWatcherServiceClient(cc)
+	request := &pb.GetChangesRequest{FileAlias: ""}
 
-	resp, _ := client.GetLastChange(context.Background(), request)
-	fmt.Printf("Receive response => [%v]", resp)
+	resp, _ := client.GetChanges(context.Background(), request)
+	fmt.Println(len(resp.Changes))
+	for _, r := range resp.Changes {
+		fmt.Printf("%s :: alias: %s, event: %s\n", r.Timestamp.AsTime().Format("20060102 15:04:05"), r.FileAlias, r.EventName)
+	}
+
+	client.StartWatching(context.Background(), &pb.StartWatchingRequest{
+		FileAlias: "test2",
+		FilePath:  "internal/testdata/testfile2.txt",
+	})
 }

@@ -6,8 +6,10 @@ import (
 	"net"
 	"os"
 
-	"github.com/kamilWyszynski1/filewatcher-grpc/internal/lru"
-	pb "github.com/kamilWyszynski1/filewatcher-grpc/internal/watcher"
+	"github.com/kamilWyszynski1/filewatcher-grpc/internal/watcher"
+
+	pb "github.com/kamilWyszynski1/filewatcher-grpc/internal/pb"
+
 	bolt "go.etcd.io/bbolt"
 	"google.golang.org/grpc"
 )
@@ -22,7 +24,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error %v", err)
 	}
-	fmt.Printf("Server is listening on %v ...", address)
+	fmt.Printf("Server is listening on %v ...\n", address)
 
 	db, err := bolt.Open(boltPath, 0666, nil)
 	if err != nil {
@@ -30,19 +32,19 @@ func main() {
 	}
 	defer db.Close()
 
-	changes := make(chan *pb.Change)
-
-	cache := lru.NewLRU(10, nil)
-	repo := pb.NewRepository(db)
-	if err := repo.StartListening(changes); err != nil {
-		panic(err)
+	l := watcher.Listener{
+		StartWatchingRequest: &pb.StartWatchingRequest{
+			FilePath:  "internal/testdata/testfile.txt",
+			FileAlias: "testfile",
+		},
+		Channel: make(chan *pb.Change),
 	}
-	svc := pb.NewService(cache, repo)
-	err = svc.
-		Logger(log.New(os.Stdout, "", log.LstdFlags)).
-		Filename("internal/testdata/testfile.txt").
-		Watch(changes)
-	if err != nil {
+
+	repo := watcher.NewRepository(db, log.New(os.Stdout, "repo ", log.LstdFlags))
+	svc := watcher.NewManager(repo,
+		watcher.WithLogger(log.New(os.Stdout, "svc ", log.LstdFlags)),
+		watcher.WithListener(l))
+	if err := svc.Watch(); err != nil {
 		panic(err)
 	}
 

@@ -1,0 +1,31 @@
+﻿syntax = "proto3";
+
+package pb;
+option go_package = "./;pb";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+message StartWatchingRequest {
+    string file_alias = 1;
+    string file_path = 2;
+}
+
+message GetChangesRequest {
+    string file_alias = 1;
+}
+
+message Change {
+    string file_alias = 1;
+    string event_name = 2;
+    google.protobuf.Timestamp timestamp = 3;
+}
+
+message GetChangesResponse {
+    repeated Change changes = 1;
+}
+
+service WatcherService {
+    rpc StartWatching(StartWatchingRequest) returns (google.protobuf.Empty);
+    rpc GetChanges(GetChangesRequest) returns (GetChangesResponse);
+}

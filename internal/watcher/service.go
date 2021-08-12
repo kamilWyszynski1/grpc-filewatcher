@@ -5,95 +5,167 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/golang/protobuf/ptypes/empty"
+	"github.com/kamilWyszynski1/filewatcher-grpc/internal/pb"
+
 	"github.com/fsnotify/fsnotify"
-	"github.com/kamilWyszynski1/filewatcher-grpc/internal/lru"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-type Service struct {
-	UnimplementedWatcherServiceServer
-	log               *log.Logger
-	filename          string
-	cache             lru.LRU
-	fileWatcherCloser func() error
-	done              chan struct{}
-	repo              Repository
+type Manager struct {
+	pb.UnimplementedWatcherServiceServer
+	log                *log.Logger
+	done               map[string]chan struct{}
+	repo               Repository
+	changesChannels    map[*pb.StartWatchingRequest]chan *pb.Change
+	fileWatcherClosers map[*pb.StartWatchingRequest]func() error
 }
 
-func NewService(cache lru.LRU, repo Repository) *Service {
-	return &Service{
-		cache: cache,
-		repo:  repo,
+func NewManager(repo Repository, options ...Option) *Manager {
+	s := &Manager{
+		repo:               repo,
+		fileWatcherClosers: map[*pb.StartWatchingRequest]func() error{},
+		done:               map[string]chan struct{}{},
 	}
-}
-
-func (s *Service) Filename(filename string) *Service {
-	s.filename = filename
+	for _, opt := range options {
+		opt(s)
+	}
 	return s
 }
 
-func (s *Service) Logger(log *log.Logger) *Service {
-	s.log = log
-	return s
-}
+type Option func(m *Manager)
 
-func (s Service) Close() error {
-	s.done <- struct{}{}
-	return s.fileWatcherCloser()
-}
-
-func (s *Service) Watch(changes chan *Change) error {
-	fileWatcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		return err
+func WithLogger(log *log.Logger) Option {
+	return func(m *Manager) {
+		m.log = log
 	}
-	s.fileWatcherCloser = fileWatcher.Close
+}
 
-	go func() {
-		for {
-			select {
-			case event, ok := <-fileWatcher.Events:
-				if !ok {
-					continue
-				}
-				fmt.Println(event)
-				ch := &Change{
-					FileName:  s.filename,
-					EventName: event.String(),
-					Timestamp: timestamppb.Now(),
-				}
-				s.cache.Add(ch)
-				changes <- ch
-			case err, ok := <-fileWatcher.Errors:
-				if !ok {
-					continue
-				}
-				s.logn("error:", err)
+func WithListener(l Listener) Option {
+	return func(m *Manager) {
+		m.addListener(l)
+	}
+}
 
-			case <-s.done:
-				s.logn("closing watcher")
-				return
-			}
+func (m *Manager) addListener(l Listener) {
+	if m.changesChannels == nil {
+		m.changesChannels = make(map[*pb.StartWatchingRequest]chan *pb.Change)
+	}
+	m.changesChannels[l.StartWatchingRequest] = l.Channel
+}
+
+func (m Manager) Close() error {
+	for _, d := range m.done {
+		d <- struct{}{}
+	}
+	for fName, c := range m.fileWatcherClosers {
+		if err := c(); err != nil {
+			return fmt.Errorf("failed to close %s watcher", fName)
 		}
-	}()
-	if err := fileWatcher.Add(s.filename); err != nil {
-		return err
 	}
 	return nil
 }
 
-func (s Service) logf(format string, args ...interface{}) {
-	if s.log != nil {
-		s.log.Printf(format, args...)
+// Watch main function that starts whole watching over file.
+// Method starts goroutine that watch files and goroutines that tracks changes in repo.
+func (m *Manager) Watch() error {
+	for req, channel := range m.changesChannels {
+		if err := m.startWatchingFlow(req, channel); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// startWatchingFlow starts repo listener and watcher goroutine.
+func (m *Manager) startWatchingFlow(req *pb.StartWatchingRequest, channel chan *pb.Change) error {
+	if m.isFileAlreadyWatched(req.FilePath) {
+		m.logf("file %s already watched, skipping\n", req.FileAlias)
+		return nil
+	}
+	fWatcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return err
+	}
+
+	if err := m.repo.StartListening(Listener{
+		StartWatchingRequest: req,
+		Channel:              channel,
+	}); err != nil {
+		return fmt.Errorf("failed to start listening on repo, %w", err)
+	}
+	m.fileWatcherClosers[req] = fWatcher.Close
+	stopChannel := make(chan struct{})
+	m.done[req.FileAlias] = stopChannel
+
+	m.logn(fmt.Sprintf("starting watching over %s file", req.FileAlias))
+	go m.watch(req.FileAlias, fWatcher, channel, stopChannel)
+	return fWatcher.Add(req.FilePath)
+}
+
+func (m Manager) isFileAlreadyWatched(filepath string) bool {
+	for k := range m.fileWatcherClosers {
+		if k.FilePath == filepath {
+			return true
+		}
+	}
+	return false
+}
+
+func (m Manager) watch(fileAlias string, fileWatcher *fsnotify.Watcher, changes chan *pb.Change, done chan struct{}) {
+	for {
+		select {
+		case event, ok := <-fileWatcher.Events:
+			if !ok {
+				continue
+			}
+			ch := &pb.Change{
+				FileAlias: fileAlias,
+				EventName: event.String(),
+				Timestamp: timestamppb.Now(),
+			}
+			changes <- ch
+		case err, ok := <-fileWatcher.Errors:
+			if !ok {
+				continue
+			}
+			m.logn("error:", err)
+
+		case <-done:
+			m.logn("closing watcher")
+			return
+		}
 	}
 }
 
-func (s Service) logn(args ...interface{}) {
-	if s.log != nil {
-		s.log.Println(args...)
+func (m Manager) logf(format string, args ...interface{}) {
+	if m.log != nil {
+		m.log.Printf(format, args...)
 	}
 }
 
-func (s Service) GetLastChange(context.Context, *Empty) (*Change, error) {
-	return s.repo.Get(1)
+func (m Manager) logn(args ...interface{}) {
+	if m.log != nil {
+		m.log.Println(args...)
+	}
+}
+
+// GetChanges returns all file changes.
+func (m Manager) GetChanges(context.Context, *pb.GetChangesRequest) (*pb.GetChangesResponse, error) {
+	changes, err := m.repo.GetAll()
+	if err != nil {
+		return nil, err
+	}
+	return &pb.GetChangesResponse{Changes: changes}, nil
+}
+
+// StartWatching order manager to create new watch-flow for file.
+func (m *Manager) StartWatching(_ context.Context, req *pb.StartWatchingRequest) (*empty.Empty, error) {
+	m.logn(fmt.Sprintf("starting watching over: %s", req.FilePath))
+	ch := make(chan *pb.Change)
+	m.addListener(Listener{
+		Channel:              ch,
+		StartWatchingRequest: req,
+	})
+	return &empty.Empty{}, m.startWatchingFlow(req, ch)
 }
